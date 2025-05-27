@@ -237,16 +237,13 @@ class CNNFromScratch:
                 output = layer.forward(output)
         return output
 
-# --- Keras Model Training and Hyperparameter Analysis ---
 def load_and_preprocess_cifar10():
     (x_train_full, y_train_full), (x_test, y_test) = keras.datasets.cifar10.load_data()
 
-    # Split training into train and validation (40k train, 10k val)
     x_train, x_val, y_train, y_val = train_test_split(
         x_train_full, y_train_full, test_size=10000, random_state=42, stratify=y_train_full
     )
 
-    # Normalize pixel values
     x_train = x_train.astype("float32") / 255.0
     x_val = x_val.astype("float32") / 255.0
     x_test = x_test.astype("float32") / 255.0
