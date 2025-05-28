@@ -4,171 +4,191 @@ from tensorflow import keras
 from tensorflow.keras import layers
 from utils import relu, softmax, pad_with_zeros, calculate_f1_macro, plot_history
 from sklearn.model_selection import train_test_split
+from scipy.signal import convolve2d
 
+# convolution layer
 class ManualConv2DLayer:
     def __init__(self, kernel, bias, stride=1, padding='valid'):
-        self.kernel = kernel # Shape: (KH, KW, C_in, C_out)
-        self.bias = bias # Shape: (C_out,)
+        self.kernel = kernel  # Shape: (KH, KW, C_in, C_out)
+        self.bias = bias  # Shape: (C_out,)
         self.stride = stride
         self.padding = padding.lower()
 
-    def forward(self, X_batch): # X_batch shape: (N, H_in, W_in, C_in)
+    def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         KH, KW, _, C_out = self.kernel.shape
 
         if self.padding == 'same':
             out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width  = int(np.ceil(float(W_in) / float(self.stride)))
-
+            out_width = int(np.ceil(float(W_in) / float(self.stride)))
             pad_h_total = max((out_height - 1) * self.stride + KH - H_in, 0)
             pad_w_total = max((out_width - 1) * self.stride + KW - W_in, 0)
-
             pad_top = pad_h_total // 2
             pad_bottom = pad_h_total - pad_top
             pad_left = pad_w_total // 2
             pad_right = pad_w_total - pad_left
-            
-            X_padded = np.pad(X_batch, ((0,0), (pad_top, pad_bottom), (pad_left, pad_right), (0,0)), mode='constant')
-            H_in, W_in = X_padded.shape[1:3]
-        elif self.padding == 'valid':
+            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant')
+        else:
             X_padded = X_batch
             out_height = (H_in - KH) // self.stride + 1
             out_width = (W_in - KW) // self.stride + 1
-        else:
-            raise ValueError("Invalid padding mode")
 
         output = np.zeros((N, out_height, out_width, C_out))
 
         for n in range(N):
-            for c_out_idx in range(C_out):
-                for r_out in range(out_height):
-                    for c_out in range(out_width):
-                        r_start = r_out * self.stride
-                        r_end = r_start + KH
-                        c_start = c_out * self.stride
-                        c_end = c_start + KW
-                        
-                        x_slice = X_padded[n, r_start:r_end, c_start:c_end, :]
-                        
-                        conv_sum = np.sum(x_slice * self.kernel[:, :, :, c_out_idx])
-                        output[n, r_out, c_out, c_out_idx] = conv_sum
-                output[n, :, :, c_out_idx] += self.bias[c_out_idx]
+            for c_out in range(C_out):
+                for c_in in range(C_in):
+                    conv_result = convolve2d(
+                        X_padded[n, :, :, c_in],
+                        self.kernel[:, :, c_in, c_out],
+                        mode='valid'
+                    )
+                    if self.stride > 1:
+                        conv_result = conv_result[::self.stride, ::self.stride]
+                    if conv_result.shape != (out_height, out_width):
+                        raise ValueError(f"Dimension mismatch: conv_result shape {conv_result.shape}, expected ({out_height}, {out_width})")
+                    output[n, :, :, c_out] += conv_result
+                output[n, :, :, c_out] += self.bias[c_out]
+
         return output
 
+# max pooling layer
 class ManualMaxPooling2DLayer:
-    def __init__(self, pool_size=(2, 2), stride=None, padding='valid'): # Keras default
+    def __init__(self, pool_size=(2, 2), stride=None, padding='valid'):
         self.pool_size = pool_size
         self.stride = stride if stride is not None else pool_size[0]
         self.padding = padding.lower()
 
-    def forward(self, X_batch): # X_batch shape: (N, H_in, W_in, C_in)
+    def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         PH, PW = self.pool_size
 
         if self.padding == 'same':
             out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width  = int(np.ceil(float(W_in) / float(self.stride)))
-
+            out_width = int(np.ceil(float(W_in) / float(self.stride)))
             pad_h_total = max((out_height - 1) * self.stride + PH - H_in, 0)
             pad_w_total = max((out_width - 1) * self.stride + PW - W_in, 0)
-            
             pad_top = pad_h_total // 2
             pad_bottom = pad_h_total - pad_top
             pad_left = pad_w_total // 2
             pad_right = pad_w_total - pad_left
-            
-            X_padded = np.pad(X_batch, ((0,0), (pad_top, pad_bottom), (pad_left, pad_right), (0,0)), mode='constant', constant_values=-np.inf)
-            H_in, W_in = X_padded.shape[1:3]
-        elif self.padding == 'valid':
+            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), 
+                              mode='constant', constant_values=-np.inf)
+        else:
             X_padded = X_batch
             out_height = (H_in - PH) // self.stride + 1
             out_width = (W_in - PW) // self.stride + 1
-        else:
-            raise ValueError("Invalid padding mode for MaxPooling")
 
+        if out_height <= 0 or out_width <= 0:
+            raise ValueError(f"Invalid output dimensions: out_height={out_height}, out_width={out_width}")
+        
+        H_padded, W_padded = X_padded.shape[1:3]
+        if (out_height - 1) * self.stride + PH > H_padded or (out_width - 1) * self.stride + PW > W_padded:
+            raise ValueError(f"Patch size ({PH}, {PW}) with stride {self.stride} exceeds padded input dimensions ({H_padded}, {W_padded})")
 
         output = np.zeros((N, out_height, out_width, C_in))
 
         for n in range(N):
-            for c_idx in range(C_in):
-                for r_out in range(out_height):
-                    for c_out in range(out_width):
-                        r_start = r_out * self.stride
-                        r_end = r_start + PH
-                        c_start = c_out * self.stride
-                        c_end = c_start + PW
-                        
-                        x_slice = X_padded[n, r_start:r_end, c_start:c_end, c_idx]
-                        output[n, r_out, c_out, c_idx] = np.max(x_slice)
+            for c in range(C_in):
+                # print(f"Processing sample {n}/{N}, channel {c}/{C_in}")
+                # print(f"X_padded shape: {X_padded[n, :, :, c].shape}, out_height: {out_height}, out_width: {out_width}")
+                patches = np.lib.stride_tricks.as_strided(
+                    X_padded[n, :, :, c],
+                    shape=(out_height, out_width, PH, PW),
+                    strides=(
+                        self.stride * X_padded.strides[1],
+                        self.stride * X_padded.strides[2],
+                        X_padded.strides[1],
+                        X_padded.strides[2]
+                    )
+                )
+                # print(f"Patches shape: {patches.shape}")
+                output[n, :, :, c] = np.max(patches, axis=(2, 3))
+                # print(f"Output shape after max: {output[n, :, :, c].shape}")
+
         return output
 
+# average pooling layer
 class ManualAveragePooling2DLayer:
     def __init__(self, pool_size=(2, 2), stride=None, padding='valid'):
         self.pool_size = pool_size
         self.stride = stride if stride is not None else pool_size[0]
         self.padding = padding.lower()
 
-    def forward(self, X_batch): # X_batch shape: (N, H_in, W_in, C_in)
+    def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         PH, PW = self.pool_size
 
         if self.padding == 'same':
             out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width  = int(np.ceil(float(W_in) / float(self.stride)))
-
+            out_width = int(np.ceil(float(W_in) / float(self.stride)))
             pad_h_total = max((out_height - 1) * self.stride + PH - H_in, 0)
             pad_w_total = max((out_width - 1) * self.stride + PW - W_in, 0)
-            
             pad_top = pad_h_total // 2
             pad_bottom = pad_h_total - pad_top
             pad_left = pad_w_total // 2
             pad_right = pad_w_total - pad_left
-            
-            X_padded = np.pad(X_batch, ((0,0), (pad_top, pad_bottom), (pad_left, pad_right), (0,0)), mode='constant')
-            H_in, W_in = X_padded.shape[1:3]
-        elif self.padding == 'valid':
+            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), 
+                              mode='constant')
+        else:
             X_padded = X_batch
             out_height = (H_in - PH) // self.stride + 1
             out_width = (W_in - PW) // self.stride + 1
-        else:
-            raise ValueError("Invalid padding mode for AvgPooling")
+
+        if out_height <= 0 or out_width <= 0:
+            raise ValueError(f"Invalid output dimensions: out_height={out_height}, out_width={out_width}")
+        
+        H_padded, W_padded = X_padded.shape[1:3]
+        if (out_height - 1) * self.stride + PH > H_padded or (out_width - 1) * self.stride + PW > W_padded:
+            raise ValueError(f"Patch size ({PH}, {PW}) with stride {self.stride} exceeds padded input dimensions ({H_padded}, {W_padded})")
 
         output = np.zeros((N, out_height, out_width, C_in))
 
         for n in range(N):
-            for c_idx in range(C_in):
-                for r_out in range(out_height):
-                    for c_out in range(out_width):
-                        r_start = r_out * self.stride
-                        r_end = r_start + PH
-                        c_start = c_out * self.stride
-                        c_end = c_start + PW
-                        
-                        x_slice = X_padded[n, r_start:r_end, c_start:c_end, c_idx]
-                        output[n, r_out, c_out, c_idx] = np.mean(x_slice)
+            for c in range(C_in):
+                # print(f"Processing sample {n}/{N}, channel {c}/{C_in}")
+                # print(f"X_padded shape: {X_padded[n, :, :, c].shape}, out_height: {out_height}, out_width: {out_width}")
+                patches = np.lib.stride_tricks.as_strided(
+                    X_padded[n, :, :, c],
+                    shape=(out_height, out_width, PH, PW),
+                    strides=(
+                        self.stride * X_padded.strides[1],
+                        self.stride * X_padded.strides[2],
+                        X_padded.strides[1],
+                        X_padded.strides[2]
+                    )
+                )
+                # print(f"Patches shape: {patches.shape}")
+                output[n, :, :, c] = np.mean(patches, axis=(2, 3))
+                # print(f"Output shape after mean: {output[n, :, :, c].shape}")
+
         return output
 
+# flatten layer
 class ManualFlattenLayer:
-    def forward(self, X_batch): # X_batch shape: (N, H, W, C)
+    def forward(self, X_batch):  # X_batch shape: (N, H, W, C)
         N = X_batch.shape[0]
-        return X_batch.reshape(N, -1) # Reshape to (N, H*W*C)
+        return X_batch.reshape(N, -1)  # Reshape to (N, H*W*C)
 
+# global average pooling layer
 class ManualGlobalAveragePooling2DLayer:
-    def forward(self, X_batch): # X_batch shape: (N, H, W, C)
-        return np.mean(X_batch, axis=(1, 2)) # Result shape (N, C)
+    def forward(self, X_batch):  # X_batch shape: (N, H, W, C)
+        return np.mean(X_batch, axis=(1, 2))  # Result shape (N, C)
 
+# dense layer
 class ManualDenseLayer:
     def __init__(self, weights, bias, activation_fn=None):
-        self.weights = weights # Shape: (input_features, output_features)
-        self.bias = bias # Shape: (output_features,)
+        self.weights = weights  # Shape: (input_features, output_features)
+        self.bias = bias  # Shape: (output_features,)
         self.activation_fn = activation_fn
 
-    def forward(self, X_batch): # X_batch shape: (N, input_features)
+    def forward(self, X_batch):  # X_batch shape: (N, input_features)
         output = np.dot(X_batch, self.weights) + self.bias
         if self.activation_fn:
             output = self.activation_fn(output)
         return output
 
+# self made CNN
 class CNNFromScratch:
     def __init__(self):
         self.layers = []
@@ -230,13 +250,20 @@ class CNNFromScratch:
 
     def predict(self, X_batch):
         output = X_batch
+        i = 1
         for layer in self.layers:
+            print(f"in progress {i}")
+            i += 1
             if callable(layer) and not isinstance(layer, (ManualConv2DLayer, ManualMaxPooling2DLayer, ManualAveragePooling2DLayer, ManualFlattenLayer, ManualGlobalAveragePooling2DLayer, ManualDenseLayer)):
+                print(f"{i} masuk ke atas")
                 output = layer(output)
             else:
+                print(f"{i} masuk ke bawah")
+                print(type(layer))
                 output = layer.forward(output)
         return output
 
+# cifar10 loading
 def load_and_preprocess_cifar10():
     (x_train_full, y_train_full), (x_test, y_test) = keras.datasets.cifar10.load_data()
 
@@ -255,6 +282,7 @@ def load_and_preprocess_cifar10():
     print(f"x_test shape: {x_test.shape}")
     return (x_train, y_train), (x_val, y_val), (x_test, y_test), num_classes
 
+# build keras CNN model
 def build_cnn_model(input_shape, num_classes, conv_layers_config, pooling_type='max', use_global_pooling=False):
     model = keras.Sequential()
     model.add(layers.Input(shape=input_shape))
