@@ -47,6 +47,8 @@ def run_cnn_pipeline():
     keras_cnn.fit(x_train_cnn, y_train_cnn, epochs=5, validation_data=(x_val_cnn, y_val_cnn), verbose=1)
     keras_cnn.save("cnn_model.keras")
 
+    # keras_cnn = keras.models.load_model("cnn_model.keras")
+
     # 3. Manual Forward Propagation
     print("\n--- CNN Manual Forward Propagation ---")
     cnn_manual = cnn_model.CNNFromScratch()

@@ -1,4 +1,3 @@
-
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
@@ -229,6 +228,17 @@ class CNNFromScratch:
     def add_keras_layer(self, keras_layer):
         manual_layer_class = self.keras_layer_map.get(type(keras_layer))
         
+        layer_activation_fn = None
+        if hasattr(keras_layer, 'activation') and keras_layer.activation is not None:
+            try:
+                activation_name = keras.activations.serialize(keras_layer.activation)
+                if activation_name == 'relu': layer_activation_fn = relu
+                elif activation_name == 'softmax': layer_activation_fn = softmax
+                # TODO: add more activation layer
+            except:
+                pass
+
+
         if manual_layer_class is None:
             if isinstance(keras_layer, layers.Activation):
                 activation_name = keras_layer.get_config()['activation']
@@ -244,28 +254,34 @@ class CNNFromScratch:
 
         if type(keras_layer) == layers.Conv2D:
             weights, bias = keras_layer.get_weights()
-            stride_param = keras_layer.strides # keras_layer.strides is tuple (sH, sW)
+            stride_param = keras_layer.strides 
             padding = keras_layer.padding
             manual_layer = manual_layer_class(weights, bias, stride=stride_param, padding=padding)
         elif type(keras_layer) in [layers.MaxPooling2D, layers.AveragePooling2D]:
             pool_size = keras_layer.pool_size
-            stride_param = keras_layer.strides # keras_layer.strides is tuple (sH, sW)
+            stride_param = keras_layer.strides 
             padding = keras_layer.padding
             manual_layer = manual_layer_class(pool_size=pool_size, stride=stride_param, padding=padding)
         elif type(keras_layer) in [layers.Flatten, layers.GlobalAveragePooling2D]:
             manual_layer = manual_layer_class()
         elif type(keras_layer) == layers.Dense:
             weights, bias = keras_layer.get_weights()
-            activation_fn = None
-
-            activation_name = keras_layer.get_config()['activation']
-            if activation_name == 'relu': activation_fn = relu
-            elif activation_name == 'softmax': activation_fn = softmax
-            manual_layer = manual_layer_class(weights, bias, activation_fn=activation_fn)
+            
+            current_dense_activation_fn = None
+            activation_name_dense = keras_layer.get_config()['activation']
+            if activation_name_dense == 'relu': current_dense_activation_fn = relu
+            elif activation_name_dense == 'softmax': current_dense_activation_fn = softmax
+            
+            manual_layer = manual_layer_class(weights, bias, activation_fn=current_dense_activation_fn)
+            layer_activation_fn = None
         else:
              raise ValueError(f"Layer type {type(keras_layer)} was mapped but not handled in conditional block.")
 
         self.layers.append(manual_layer)
+        
+        if layer_activation_fn and not (type(keras_layer) == layers.Dense):
+            self.layers.append(layer_activation_fn)
+            print(f"Added separate activation {layer_activation_fn.__name__} after {keras_layer.name}")
 
     def load_keras_model(self, keras_model):
         self.layers = [] # reset layers
@@ -363,12 +379,6 @@ def train_and_evaluate_cnn_variant(
     
     y_pred_manual_proba = manual_cnn.predict(x_test) 
     
-    # Ensure manual predictions are valid probabilities (e.g. sum to 1, non-negative)
-    # if not np.allclose(np.sum(y_pred_manual_proba, axis=1), 1.0):
-    #     print("Warning: Manual model softmax outputs do not sum to 1.")
-    # if np.any(y_pred_manual_proba < 0):
-    #     print("Warning: Manual model softmax outputs contain negative values.")
-
     manual_loss = tf.keras.losses.sparse_categorical_crossentropy(y_test.flatten(), y_pred_manual_proba).numpy().mean()
     manual_acc = np.mean(np.argmax(y_pred_manual_proba, axis=1) == y_test.flatten())
     f1_manual = calculate_f1_macro(y_test, y_pred_manual_proba, num_classes)
@@ -384,7 +394,7 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     best_f1 = -1
     best_model_cnn = None
     
-    analysis_epochs = 2
+    analysis_epochs = 5
 
     print("\n=== 1. Analisis Pengaruh Jumlah Layer Konvolusi ===")
     num_conv_layer_variations = [
@@ -465,4 +475,3 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     else:
         print("\nNo Keras CNN model was trained successfully to be saved (or analysis was too short).")
     return best_model_cnn
-
