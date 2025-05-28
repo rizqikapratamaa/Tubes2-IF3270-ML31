@@ -1,167 +1,191 @@
+
 import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 from tensorflow.keras import layers
-from utils import relu, softmax, pad_with_zeros, calculate_f1_macro, plot_history
+from utils import relu, softmax, calculate_f1_macro, plot_history
 from sklearn.model_selection import train_test_split
-from scipy.signal import convolve2d
 
 # convolution layer
 class ManualConv2DLayer:
-    def __init__(self, kernel, bias, stride=1, padding='valid'):
+    def __init__(self, kernel, bias, stride=(1,1), padding='valid'): # stride is tuple (sH, sW)
         self.kernel = kernel  # Shape: (KH, KW, C_in, C_out)
         self.bias = bias  # Shape: (C_out,)
-        self.stride = stride
         self.padding = padding.lower()
+
+        if isinstance(stride, int):
+            self.stride_h, self.stride_w = stride, stride
+        elif isinstance(stride, tuple) and len(stride) == 2:
+            self.stride_h, self.stride_w = stride[0], stride[1]
+        else:
+            raise ValueError(f"Invalid stride format for Conv2D: {stride}")
+
 
     def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         KH, KW, _, C_out = self.kernel.shape
 
         if self.padding == 'same':
-            out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width = int(np.ceil(float(W_in) / float(self.stride)))
-            pad_h_total = max((out_height - 1) * self.stride + KH - H_in, 0)
-            pad_w_total = max((out_width - 1) * self.stride + KW - W_in, 0)
+            out_height = int(np.ceil(float(H_in) / float(self.stride_h)))
+            out_width = int(np.ceil(float(W_in) / float(self.stride_w)))
+            
+            pad_h_total = max((out_height - 1) * self.stride_h + KH - H_in, 0)
+            pad_w_total = max((out_width - 1) * self.stride_w + KW - W_in, 0)
+            
             pad_top = pad_h_total // 2
             pad_bottom = pad_h_total - pad_top
             pad_left = pad_w_total // 2
             pad_right = pad_w_total - pad_left
-            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant')
-        else:
+            
+            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), mode='constant', constant_values=0.0)
+        elif self.padding == 'valid':
+            out_height = (H_in - KH) // self.stride_h + 1
+            out_width = (W_in - KW) // self.stride_w + 1
             X_padded = X_batch
-            out_height = (H_in - KH) // self.stride + 1
-            out_width = (W_in - KW) // self.stride + 1
+        else:
+            raise ValueError(f"Unsupported padding type: {self.padding}")
 
-        output = np.zeros((N, out_height, out_width, C_out))
+        if out_height <= 0 or out_width <= 0:
+             raise ValueError(f"Output dimensions non-positive: H={out_height}, W={out_width}. Input: H_in={H_in}, W_in={W_in}, Kernel: KH={KH}, KW={KW}, Stride: ({self.stride_h},{self.stride_w}), Padding: {self.padding}")
 
-        for n in range(N):
-            for c_out in range(C_out):
-                for c_in in range(C_in):
-                    conv_result = convolve2d(
-                        X_padded[n, :, :, c_in],
-                        self.kernel[:, :, c_in, c_out],
-                        mode='valid'
-                    )
-                    if self.stride > 1:
-                        conv_result = conv_result[::self.stride, ::self.stride]
-                    if conv_result.shape != (out_height, out_width):
-                        raise ValueError(f"Dimension mismatch: conv_result shape {conv_result.shape}, expected ({out_height}, {out_width})")
-                    output[n, :, :, c_out] += conv_result
-                output[n, :, :, c_out] += self.bias[c_out]
+        shape_col = (N, out_height, out_width, KH, KW, C_in)
+        
+        strides_col = (
+            X_padded.strides[0],
+            self.stride_h * X_padded.strides[1],
+            self.stride_w * X_padded.strides[2],
+            X_padded.strides[1],
+            X_padded.strides[2],
+            X_padded.strides[3]
+        )
+        
+        H_padded, W_padded = X_padded.shape[1:3]
+        if (out_height > 0 and (out_height - 1) * self.stride_h + KH > H_padded) or \
+           (out_width > 0 and (out_width - 1) * self.stride_w + KW > W_padded):
+            raise ValueError(
+                f"Calculated patch extent exceeds padded input dimensions. "
+                f"H_padded={H_padded}, W_padded={W_padded}. "
+                f"out_height={out_height}, out_width={out_width}. "
+                f"Required H: {(out_height - 1) * self.stride_h + KH}, "
+                f"Required W: {(out_width - 1) * self.stride_w + KW}."
+            )
 
+        X_col = np.lib.stride_tricks.as_strided(X_padded, shape=shape_col, strides=strides_col)
+        
+        X_col_reshaped = X_col.reshape(N * out_height * out_width, KH * KW * C_in)
+        kernel_reshaped = self.kernel.reshape(KH * KW * C_in, C_out)
+        
+        output_reshaped = np.dot(X_col_reshaped, kernel_reshaped)
+        output = output_reshaped.reshape(N, out_height, out_width, C_out)
+        
+        output += self.bias
+        
         return output
 
 # max pooling layer
 class ManualMaxPooling2DLayer:
     def __init__(self, pool_size=(2, 2), stride=None, padding='valid'):
-        self.pool_size = pool_size
-        self.stride = stride if stride is not None else pool_size[0]
+        self.pool_size = pool_size # (PH, PW)
         self.padding = padding.lower()
+        if stride is None:
+            self.stride_h, self.stride_w = pool_size[0], pool_size[1]
+        elif isinstance(stride, int):
+            self.stride_h, self.stride_w = stride, stride
+        elif isinstance(stride, tuple) and len(stride) == 2:
+            self.stride_h, self.stride_w = stride[0], stride[1]
+        else:
+            raise ValueError(f"Invalid stride format for MaxPooling: {stride}")
 
     def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         PH, PW = self.pool_size
 
         if self.padding == 'same':
-            out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width = int(np.ceil(float(W_in) / float(self.stride)))
-            pad_h_total = max((out_height - 1) * self.stride + PH - H_in, 0)
-            pad_w_total = max((out_width - 1) * self.stride + PW - W_in, 0)
-            pad_top = pad_h_total // 2
-            pad_bottom = pad_h_total - pad_top
-            pad_left = pad_w_total // 2
-            pad_right = pad_w_total - pad_left
-            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), 
+            out_height = int(np.ceil(float(H_in) / float(self.stride_h)))
+            out_width = int(np.ceil(float(W_in) / float(self.stride_w)))
+            pad_h_total = max((out_height - 1) * self.stride_h + PH - H_in, 0)
+            pad_w_total = max((out_width - 1) * self.stride_w + PW - W_in, 0)
+            pad_top = pad_h_total // 2; pad_bottom = pad_h_total - pad_top
+            pad_left = pad_w_total // 2; pad_right = pad_w_total - pad_left
+
+            X_float = X_batch if np.issubdtype(X_batch.dtype, np.floating) else X_batch.astype(np.float32)
+            X_padded = np.pad(X_float, ((0,0),(pad_top,pad_bottom),(pad_left,pad_right),(0,0)), 
                               mode='constant', constant_values=-np.inf)
+        elif self.padding == 'valid':
+            out_height = (H_in - PH) // self.stride_h + 1
+            out_width = (W_in - PW) // self.stride_w + 1
+            if not np.issubdtype(X_batch.dtype, np.floating):
+                 X_padded = X_batch.astype(np.float32) 
+            else:
+                 X_padded = X_batch
         else:
-            X_padded = X_batch
-            out_height = (H_in - PH) // self.stride + 1
-            out_width = (W_in - PW) // self.stride + 1
+            raise ValueError(f"Unsupported padding: {self.padding}")
 
         if out_height <= 0 or out_width <= 0:
-            raise ValueError(f"Invalid output dimensions: out_height={out_height}, out_width={out_width}")
+            raise ValueError(f"Invalid output dims: H_out={out_height}, W_out={out_width} for H_in={H_in}, W_in={W_in}, Pool=({PH},{PW}), Stride=({self.stride_h},{self.stride_w})")
         
+        S_N, S_H, S_W, S_C = X_padded.strides
+        output_shape_strided = (N, out_height, out_width, C_in, PH, PW)
+        output_strides = (S_N, self.stride_h * S_H, self.stride_w * S_W, S_C, S_H, S_W)
+
         H_padded, W_padded = X_padded.shape[1:3]
-        if (out_height - 1) * self.stride + PH > H_padded or (out_width - 1) * self.stride + PW > W_padded:
-            raise ValueError(f"Patch size ({PH}, {PW}) with stride {self.stride} exceeds padded input dimensions ({H_padded}, {W_padded})")
-
-        output = np.zeros((N, out_height, out_width, C_in))
-
-        for n in range(N):
-            for c in range(C_in):
-                # print(f"Processing sample {n}/{N}, channel {c}/{C_in}")
-                # print(f"X_padded shape: {X_padded[n, :, :, c].shape}, out_height: {out_height}, out_width: {out_width}")
-                patches = np.lib.stride_tricks.as_strided(
-                    X_padded[n, :, :, c],
-                    shape=(out_height, out_width, PH, PW),
-                    strides=(
-                        self.stride * X_padded.strides[1],
-                        self.stride * X_padded.strides[2],
-                        X_padded.strides[1],
-                        X_padded.strides[2]
-                    )
-                )
-                # print(f"Patches shape: {patches.shape}")
-                output[n, :, :, c] = np.max(patches, axis=(2, 3))
-                # print(f"Output shape after max: {output[n, :, :, c].shape}")
-
+        if (out_height > 0 and (out_height - 1) * self.stride_h + PH > H_padded) or \
+           (out_width > 0 and (out_width - 1) * self.stride_w + PW > W_padded):
+            raise ValueError(f"Patch size ({PH},{PW}) with stride ({self.stride_h},{self.stride_w}) exceeds padded input ({H_padded},{W_padded}) for output ({out_height},{out_width})")
+        
+        patches = np.lib.stride_tricks.as_strided(X_padded, shape=output_shape_strided, strides=output_strides)
+        output = np.max(patches, axis=(4, 5))
         return output
 
 # average pooling layer
 class ManualAveragePooling2DLayer:
     def __init__(self, pool_size=(2, 2), stride=None, padding='valid'):
         self.pool_size = pool_size
-        self.stride = stride if stride is not None else pool_size[0]
         self.padding = padding.lower()
+        if stride is None:
+            self.stride_h, self.stride_w = pool_size[0], pool_size[1]
+        elif isinstance(stride, int):
+            self.stride_h, self.stride_w = stride, stride
+        elif isinstance(stride, tuple) and len(stride) == 2:
+            self.stride_h, self.stride_w = stride[0], stride[1]
+        else:
+            raise ValueError(f"Invalid stride format for AveragePooling: {stride}")
+
 
     def forward(self, X_batch):  # X_batch shape: (N, H_in, W_in, C_in)
         N, H_in, W_in, C_in = X_batch.shape
         PH, PW = self.pool_size
 
         if self.padding == 'same':
-            out_height = int(np.ceil(float(H_in) / float(self.stride)))
-            out_width = int(np.ceil(float(W_in) / float(self.stride)))
-            pad_h_total = max((out_height - 1) * self.stride + PH - H_in, 0)
-            pad_w_total = max((out_width - 1) * self.stride + PW - W_in, 0)
-            pad_top = pad_h_total // 2
-            pad_bottom = pad_h_total - pad_top
-            pad_left = pad_w_total // 2
-            pad_right = pad_w_total - pad_left
-            X_padded = np.pad(X_batch, ((0, 0), (pad_top, pad_bottom), (pad_left, pad_right), (0, 0)), 
-                              mode='constant')
-        else:
+            out_height = int(np.ceil(float(H_in) / float(self.stride_h)))
+            out_width = int(np.ceil(float(W_in) / float(self.stride_w)))
+            pad_h_total = max((out_height - 1) * self.stride_h + PH - H_in, 0)
+            pad_w_total = max((out_width - 1) * self.stride_w + PW - W_in, 0)
+            pad_top = pad_h_total // 2; pad_bottom = pad_h_total - pad_top
+            pad_left = pad_w_total // 2; pad_right = pad_w_total - pad_left
+            X_padded = np.pad(X_batch, ((0,0),(pad_top,pad_bottom),(pad_left,pad_right),(0,0)),
+                              mode='constant', constant_values=0.0)
+        elif self.padding == 'valid':
+            out_height = (H_in - PH) // self.stride_h + 1
+            out_width = (W_in - PW) // self.stride_w + 1
             X_padded = X_batch
-            out_height = (H_in - PH) // self.stride + 1
-            out_width = (W_in - PW) // self.stride + 1
+        else:
+            raise ValueError(f"Unsupported padding: {self.padding}")
 
         if out_height <= 0 or out_width <= 0:
-            raise ValueError(f"Invalid output dimensions: out_height={out_height}, out_width={out_width}")
+            raise ValueError(f"Invalid output dims: H_out={out_height}, W_out={out_width} for H_in={H_in}, W_in={W_in}, Pool=({PH},{PW}), Stride=({self.stride_h},{self.stride_w})")
+
+        S_N, S_H, S_W, S_C = X_padded.strides
+        output_shape_strided = (N, out_height, out_width, C_in, PH, PW)
+        output_strides = (S_N, self.stride_h * S_H, self.stride_w * S_W, S_C, S_H, S_W)
         
         H_padded, W_padded = X_padded.shape[1:3]
-        if (out_height - 1) * self.stride + PH > H_padded or (out_width - 1) * self.stride + PW > W_padded:
-            raise ValueError(f"Patch size ({PH}, {PW}) with stride {self.stride} exceeds padded input dimensions ({H_padded}, {W_padded})")
+        if (out_height > 0 and (out_height - 1) * self.stride_h + PH > H_padded) or \
+           (out_width > 0 and (out_width - 1) * self.stride_w + PW > W_padded):
+            raise ValueError(f"Patch size ({PH},{PW}) with stride ({self.stride_h},{self.stride_w}) exceeds padded input ({H_padded},{W_padded}) for output ({out_height},{out_width})")
 
-        output = np.zeros((N, out_height, out_width, C_in))
-
-        for n in range(N):
-            for c in range(C_in):
-                # print(f"Processing sample {n}/{N}, channel {c}/{C_in}")
-                # print(f"X_padded shape: {X_padded[n, :, :, c].shape}, out_height: {out_height}, out_width: {out_width}")
-                patches = np.lib.stride_tricks.as_strided(
-                    X_padded[n, :, :, c],
-                    shape=(out_height, out_width, PH, PW),
-                    strides=(
-                        self.stride * X_padded.strides[1],
-                        self.stride * X_padded.strides[2],
-                        X_padded.strides[1],
-                        X_padded.strides[2]
-                    )
-                )
-                # print(f"Patches shape: {patches.shape}")
-                output[n, :, :, c] = np.mean(patches, axis=(2, 3))
-                # print(f"Output shape after mean: {output[n, :, :, c].shape}")
-
+        patches = np.lib.stride_tricks.as_strided(X_padded, shape=output_shape_strided, strides=output_strides)
+        output = np.mean(patches, axis=(4, 5))
         return output
 
 # flatten layer
@@ -199,7 +223,7 @@ class CNNFromScratch:
             layers.Flatten: ManualFlattenLayer,
             layers.GlobalAveragePooling2D: ManualGlobalAveragePooling2DLayer,
             layers.Dense: ManualDenseLayer,
-            layers.Activation: None
+            layers.Activation: None 
         }
 
     def add_keras_layer(self, keras_layer):
@@ -220,47 +244,44 @@ class CNNFromScratch:
 
         if type(keras_layer) == layers.Conv2D:
             weights, bias = keras_layer.get_weights()
-            stride = keras_layer.strides[0]
+            stride_param = keras_layer.strides # keras_layer.strides is tuple (sH, sW)
             padding = keras_layer.padding
-            manual_layer = manual_layer_class(weights, bias, stride=stride, padding=padding)
+            manual_layer = manual_layer_class(weights, bias, stride=stride_param, padding=padding)
         elif type(keras_layer) in [layers.MaxPooling2D, layers.AveragePooling2D]:
             pool_size = keras_layer.pool_size
-            stride = keras_layer.strides[0]
+            stride_param = keras_layer.strides # keras_layer.strides is tuple (sH, sW)
             padding = keras_layer.padding
-            manual_layer = manual_layer_class(pool_size=pool_size, stride=stride, padding=padding)
+            manual_layer = manual_layer_class(pool_size=pool_size, stride=stride_param, padding=padding)
         elif type(keras_layer) in [layers.Flatten, layers.GlobalAveragePooling2D]:
             manual_layer = manual_layer_class()
         elif type(keras_layer) == layers.Dense:
             weights, bias = keras_layer.get_weights()
             activation_fn = None
+
             activation_name = keras_layer.get_config()['activation']
             if activation_name == 'relu': activation_fn = relu
             elif activation_name == 'softmax': activation_fn = softmax
             manual_layer = manual_layer_class(weights, bias, activation_fn=activation_fn)
         else:
-             raise ValueError(f"Should not happen: {type(keras_layer)}")
+             raise ValueError(f"Layer type {type(keras_layer)} was mapped but not handled in conditional block.")
 
         self.layers.append(manual_layer)
 
     def load_keras_model(self, keras_model):
-        self.layers = []
+        self.layers = [] # reset layers
         for layer in keras_model.layers:
             print(f"Processing Keras layer: {layer.name} of type {type(layer)}")
             self.add_keras_layer(layer)
 
     def predict(self, X_batch):
         output = X_batch
-        i = 1
-        for layer in self.layers:
-            print(f"in progress {i}")
-            i += 1
+        for layer_idx, layer in enumerate(self.layers):
             if callable(layer) and not isinstance(layer, (ManualConv2DLayer, ManualMaxPooling2DLayer, ManualAveragePooling2DLayer, ManualFlattenLayer, ManualGlobalAveragePooling2DLayer, ManualDenseLayer)):
-                print(f"{i} masuk ke atas")
                 output = layer(output)
-            else:
-                print(f"{i} masuk ke bawah")
-                print(type(layer))
+            elif hasattr(layer, 'forward'):
                 output = layer.forward(output)
+            else:
+                raise TypeError(f"Layer {layer_idx} is of unhandled type: {type(layer)}")
         return output
 
 # cifar10 loading
@@ -319,21 +340,43 @@ def train_and_evaluate_cnn_variant(
     model = build_cnn_model(x_train.shape[1:], num_classes, conv_layers_config, pooling_type, use_global_pooling)
     model.summary()
     
+    # keras model training and evaluation
     history = model.fit(x_train, y_train,
                         epochs=epochs,
                         batch_size=batch_size,
                         validation_data=(x_val, y_val),
-                        verbose=1) # Set to 1 or 2 for progress, 0 for silent
+                        verbose=1) 
 
-    plot_history(history, title_prefix=f"CNN {description}")
+    plot_history(history, title_prefix=f"CNN {description} Keras")
 
-    test_loss, test_acc = model.evaluate(x_test, y_test, verbose=0)
+    test_loss_keras, test_acc_keras = model.evaluate(x_test, y_test, verbose=0)
     y_pred_keras_proba = model.predict(x_test)
     f1_keras = calculate_f1_macro(y_test, y_pred_keras_proba, num_classes)
     
-    print(f"Test Accuracy (Keras): {test_acc:.4f}")
+    print(f"Test Accuracy (Keras): {test_acc_keras:.4f}")
     print(f"Macro F1-Score (Keras): {f1_keras:.4f}")
+
+    # manual model loading and prediction
+    print("\n--- Evaluating Manual CNN Implementation ---")
+    manual_cnn = CNNFromScratch()
+    manual_cnn.load_keras_model(model)
     
+    y_pred_manual_proba = manual_cnn.predict(x_test) 
+    
+    # Ensure manual predictions are valid probabilities (e.g. sum to 1, non-negative)
+    # if not np.allclose(np.sum(y_pred_manual_proba, axis=1), 1.0):
+    #     print("Warning: Manual model softmax outputs do not sum to 1.")
+    # if np.any(y_pred_manual_proba < 0):
+    #     print("Warning: Manual model softmax outputs contain negative values.")
+
+    manual_loss = tf.keras.losses.sparse_categorical_crossentropy(y_test.flatten(), y_pred_manual_proba).numpy().mean()
+    manual_acc = np.mean(np.argmax(y_pred_manual_proba, axis=1) == y_test.flatten())
+    f1_manual = calculate_f1_macro(y_test, y_pred_manual_proba, num_classes)
+
+    print(f"Test Accuracy (Manual): {manual_acc:.4f}")
+    print(f"Macro F1-Score (Manual): {f1_manual:.4f}")
+    print(f"Test Loss (Manual, approx): {manual_loss:.4f}")
+
     return model, f1_keras, history
 
 def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, num_classes):
@@ -341,55 +384,60 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     best_f1 = -1
     best_model_cnn = None
     
+    analysis_epochs = 2
+
     print("\n=== 1. Analisis Pengaruh Jumlah Layer Konvolusi ===")
     num_conv_layer_variations = [
         [(32, (3,3))],                                  
         [(32, (3,3)), (64, (3,3))],                     
-        [(32, (3,3)), (64, (3,3)), (128, (3,3))]        
+        # [(32, (3,3)), (64, (3,3)), (128, (3,3))]
     ]
     for i, config in enumerate(num_conv_layer_variations):
         desc = f"NumConvLayers_{i+1}"
-        model, f1, _ = train_and_evaluate_cnn_variant(
+        keras_model_variant, f1_score_keras, _ = train_and_evaluate_cnn_variant(
             x_train, y_train, x_val, y_val, x_test, y_test, num_classes,
             conv_layers_config=config, pooling_type='max', use_global_pooling=False,
-            epochs=5, description=desc 
+            epochs=analysis_epochs, description=desc 
         )
-        results[desc] = f1
-        if f1 > best_f1: best_f1 = f1; best_model_cnn = model
+        results[desc] = f1_score_keras
+        if f1_score_keras > best_f1:
+            best_f1 = f1_score_keras
+            best_model_cnn = keras_model_variant
     print("Kesimpulan Jumlah Layer Konvolusi: [Analisis Anda di sini berdasarkan grafik dan F1-score]")
+
 
     print("\n=== 2. Analisis Pengaruh Banyak Filter ===")
     filter_variations = [
         [(16, (3,3)), (32, (3,3))], 
         [(32, (3,3)), (64, (3,3))], 
-        [(64, (3,3)), (128, (3,3))] 
+        # [(64, (3,3)), (128, (3,3))] 
     ]
     for i, config in enumerate(filter_variations):
         desc = f"NumFilters_{i+1}"
-        model, f1, _ = train_and_evaluate_cnn_variant(
+        keras_model_variant, f1_score_keras, _ = train_and_evaluate_cnn_variant(
             x_train, y_train, x_val, y_val, x_test, y_test, num_classes,
             conv_layers_config=config, pooling_type='max', use_global_pooling=False,
-            epochs=5, description=desc
+            epochs=analysis_epochs, description=desc
         )
-        results[desc] = f1
-        if f1 > best_f1: best_f1 = f1; best_model_cnn = model
+        results[desc] = f1_score_keras
+        if f1_score_keras > best_f1: best_f1 = f1_score_keras; best_model_cnn = keras_model_variant
     print("Kesimpulan Banyak Filter: [Analisis Anda di sini]")
 
     print("\n=== 3. Analisis Pengaruh Ukuran Filter ===")
     kernel_size_variations = [
         [(32, (2,2)), (64, (2,2))], 
         [(32, (3,3)), (64, (3,3))], 
-        [(32, (5,5)), (64, (5,5))]  
+        # [(32, (5,5)), (64, (5,5))]  
     ]
     for i, config in enumerate(kernel_size_variations):
         desc = f"KernelSize_{i+1}"
-        model, f1, _ = train_and_evaluate_cnn_variant(
+        keras_model_variant, f1_score_keras, _ = train_and_evaluate_cnn_variant(
             x_train, y_train, x_val, y_val, x_test, y_test, num_classes,
             conv_layers_config=config, pooling_type='max', use_global_pooling=False,
-            epochs=5, description=desc
+            epochs=analysis_epochs, description=desc
         )
-        results[desc] = f1
-        if f1 > best_f1: best_f1 = f1; best_model_cnn = model
+        results[desc] = f1_score_keras
+        if f1_score_keras > best_f1: best_f1 = f1_score_keras; best_model_cnn = keras_model_variant
     print("Kesimpulan Ukuran Filter: [Analisis Anda di sini]")
 
     print("\n=== 4. Analisis Pengaruh Jenis Pooling Layer ===")
@@ -397,16 +445,17 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     base_conv_config = [(32, (3,3)), (64, (3,3))] 
     for pool_type in pooling_variations:
         desc = f"PoolingType_{pool_type}"
-        model, f1, _ = train_and_evaluate_cnn_variant(
+        keras_model_variant, f1_score_keras, _ = train_and_evaluate_cnn_variant(
             x_train, y_train, x_val, y_val, x_test, y_test, num_classes,
             conv_layers_config=base_conv_config, pooling_type=pool_type, use_global_pooling=False,
-            epochs=5, description=desc
+            epochs=analysis_epochs, description=desc
         )
-        results[desc] = f1
-        if f1 > best_f1: best_f1 = f1; best_model_cnn = model
+        results[desc] = f1_score_keras
+        if f1_score_keras > best_f1: best_f1 = f1_score_keras; best_model_cnn = keras_model_variant
     print("Kesimpulan Jenis Pooling: [Analisis Anda di sini]")
 
-    print("\n--- Ringkasan F1 Scores CNN Variants ---")
+
+    print("\n--- Ringkasan F1 Scores CNN Variants (Keras Model) ---")
     for desc, f1_val in results.items():
         print(f"{desc}: {f1_val:.4f}")
         
@@ -414,5 +463,6 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
         best_model_cnn.save("best_cnn_model.keras")
         print("\nBest Keras CNN model saved as best_cnn_model.keras")
     else:
-        print("\nNo CNN model was trained successfully to be saved.")
+        print("\nNo Keras CNN model was trained successfully to be saved (or analysis was too short).")
     return best_model_cnn
+

@@ -44,7 +44,8 @@ def run_cnn_pipeline():
     # 2. Implementing keras model with default hyperparameter
     default_conv_config = [(32, (3,3)), (64, (3,3))]
     keras_cnn = cnn_model.build_cnn_model(x_train_cnn.shape[1:], num_classes_cnn, default_conv_config)
-    keras_cnn.fit(x_train_cnn, y_train_cnn, epochs=1, validation_data=(x_val_cnn, y_val_cnn), verbose=1)
+    keras_cnn.fit(x_train_cnn, y_train_cnn, epochs=5, validation_data=(x_val_cnn, y_val_cnn), verbose=1)
+    keras_cnn.save("cnn_model.keras")
 
     # 3. Manual Forward Propagation
     print("\n--- CNN Manual Forward Propagation ---")
