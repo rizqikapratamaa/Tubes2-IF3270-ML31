@@ -372,21 +372,6 @@ def train_and_evaluate_cnn_variant(
     print(f"Test Accuracy (Keras): {test_acc_keras:.4f}")
     print(f"Macro F1-Score (Keras): {f1_keras:.4f}")
 
-    # manual model loading and prediction
-    print("\n--- Evaluating Manual CNN Implementation ---")
-    manual_cnn = CNNFromScratch()
-    manual_cnn.load_keras_model(model)
-    
-    y_pred_manual_proba = manual_cnn.predict(x_test) 
-    
-    manual_loss = tf.keras.losses.sparse_categorical_crossentropy(y_test.flatten(), y_pred_manual_proba).numpy().mean()
-    manual_acc = np.mean(np.argmax(y_pred_manual_proba, axis=1) == y_test.flatten())
-    f1_manual = calculate_f1_macro(y_test, y_pred_manual_proba, num_classes)
-
-    print(f"Test Accuracy (Manual): {manual_acc:.4f}")
-    print(f"Macro F1-Score (Manual): {f1_manual:.4f}")
-    print(f"Test Loss (Manual, approx): {manual_loss:.4f}")
-
     return model, f1_keras, history
 
 def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, num_classes):
@@ -394,13 +379,13 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     best_f1 = -1
     best_model_cnn = None
     
-    analysis_epochs = 5
+    analysis_epochs = 10
 
     print("\n=== 1. Analisis Pengaruh Jumlah Layer Konvolusi ===")
     num_conv_layer_variations = [
         [(32, (3,3))],                                  
         [(32, (3,3)), (64, (3,3))],                     
-        # [(32, (3,3)), (64, (3,3)), (128, (3,3))]
+        [(32, (3,3)), (64, (3,3)), (128, (3,3))]
     ]
     for i, config in enumerate(num_conv_layer_variations):
         desc = f"NumConvLayers_{i+1}"
@@ -420,7 +405,7 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     filter_variations = [
         [(16, (3,3)), (32, (3,3))], 
         [(32, (3,3)), (64, (3,3))], 
-        # [(64, (3,3)), (128, (3,3))] 
+        [(64, (3,3)), (128, (3,3))] 
     ]
     for i, config in enumerate(filter_variations):
         desc = f"NumFilters_{i+1}"
@@ -437,7 +422,7 @@ def cnn_hyperparameter_analysis(x_train, y_train, x_val, y_val, x_test, y_test, 
     kernel_size_variations = [
         [(32, (2,2)), (64, (2,2))], 
         [(32, (3,3)), (64, (3,3))], 
-        # [(32, (5,5)), (64, (5,5))]  
+        [(32, (5,5)), (64, (5,5))]  
     ]
     for i, config in enumerate(kernel_size_variations):
         desc = f"KernelSize_{i+1}"
