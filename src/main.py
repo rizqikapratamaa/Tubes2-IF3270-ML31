@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 # Import model-specific modules
 import cnn as cnn_model
 import rnn as rnn_model # For SimpleRNN
-import lstm as lstm_model # For LSTM
+import lstm_1 as lstm_model # For LSTM
 
 from utils import calculate_f1_macro
 
