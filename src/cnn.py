@@ -234,7 +234,6 @@ class CNNFromScratch:
                 activation_name = keras.activations.serialize(keras_layer.activation)
                 if activation_name == 'relu': layer_activation_fn = relu
                 elif activation_name == 'softmax': layer_activation_fn = softmax
-                # TODO: add more activation layer
             except:
                 pass
 
