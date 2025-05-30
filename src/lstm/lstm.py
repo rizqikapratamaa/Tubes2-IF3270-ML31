@@ -463,39 +463,32 @@ class LSTMFromScratch:
         self.loss_fn = loss_fn_instance
         self.optimizer = optimizer_instance
     
-    def fit_manual(self, X_train_tokens, y_train_labels, epochs, batch_size):
-        if not hasattr(self, 'loss_fn') or not hasattr(self, 'optimizer'):
-            raise RuntimeError("Model must be compiled with compile_manual() before training.")
-        num_samples = X_train_tokens.shape[0]
+    def fit_manual(self, X_train_tokens, y_train_labels, epochs=1, batch_size=32):
+        num_samples = tf.shape(X_train_tokens)[0].numpy()
+        total_loss = 0
+        num_batches = num_samples // batch_size
+
         for epoch in range(epochs):
+            # Shuffle data using TensorFlow
+            indices = tf.random.shuffle(tf.range(num_samples))
+            X_train_shuffled = tf.gather(X_train_tokens, indices)
+            y_train_shuffled = tf.gather(y_train_labels, indices)
+
             epoch_loss = 0
-            permutation = np.random.permutation(num_samples)
-            X_train_shuffled = X_train_tokens[permutation]
-            y_train_shuffled = y_train_labels[permutation]
             for i in range(0, num_samples, batch_size):
-                X_batch = X_train_shuffled[i:i+batch_size]
+                x_batch = X_train_shuffled[i:i+batch_size]
                 y_batch = y_train_shuffled[i:i+batch_size]
-                layer_inputs = [X_batch]
-                current_A = X_batch
-                for layer_idx, layer in enumerate(self.layers):
-                    current_A = layer.forward(current_A)
-                    layer_inputs.append(current_A)
-                y_pred_proba = current_A
-                loss = self.loss_fn.calculate(y_pred_proba, y_batch)
-                epoch_loss += loss * X_batch.shape[0]
-                dL_dA_prev = self.loss_fn.derivative(y_pred_proba, y_batch)
-                for layer_idx in reversed(range(len(self.layers))):
-                    layer = self.layers[layer_idx]
-                    if hasattr(layer, 'backward'):
-                        if isinstance(layer, ManualEmbeddingLayer):
-                            dL_dA_prev = layer.backward(dL_dA_prev, layer_inputs[layer_idx])
-                        else:
-                            dL_dA_prev = layer.backward(dL_dA_prev)
-                    else:
-                        print(f"Warning: Layer {type(layer)} does not have a backward method. Skipping.")
-                self.optimizer.update(self.layers)
-            print(f"Epoch {epoch+1}/{epochs}, Loss: {epoch_loss/num_samples:.4f}")
-        print("Manual training finished.")
+                y_pred = self.forward(x_batch)
+                loss = self.loss_fn(y_batch, y_pred)
+                epoch_loss += loss.numpy()
+                d_loss = self.loss_fn.backward(y_batch, y_pred)
+                self.backward(d_loss)
+                self.optimizer.step()
+            
+            avg_loss = epoch_loss / num_batches
+            total_loss += avg_loss
+
+        return total_loss / epochs
 
 class ManualSGD:
     def __init__(self, learning_rate=0.01):
