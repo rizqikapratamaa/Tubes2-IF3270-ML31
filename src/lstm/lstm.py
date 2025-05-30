@@ -227,8 +227,8 @@ def lstm_hyperparameter_analysis(
     for desc, result in results.items():
         print(f"{desc}: F1 = {result['f1']:.4f}")
     if best_model_lstm:
-        best_model_lstm.save("best_lstm_model.keras")
-        print("\nBest Keras LSTM model saved as best_lstm_model.keras")
+        best_model_lstm.save("best_keras_lstm.keras")
+        print("\nBest Keras LSTM model saved as best_keras_lstm.keras")
     else:
         print("\nNo Keras LSTM model was trained successfully to be saved.")
     return best_model_lstm, results
@@ -504,55 +504,3 @@ class ManualSGD:
                         layer.grads[param_name].fill(0)
                     else:
                         print(f"Warning: No gradient found for param {param_name} in layer {type(layer)}")
-
-# if __name__ == '__main__':
-#     print("Running LSTM module directly (for testing purposes)...")
-#     (x_train, y_train), (x_val, y_val), (x_test, y_test), \
-#     num_classes, vocab_size, _ = load_and_preprocess_nusax_sentiment()
-#     print("\nTraining a default Keras LSTM model...")
-#     default_lstm_config = [{'units': 64, 'bidirectional': True, 'return_sequences': False}]
-#     keras_model_instance, f1_keras, _ = train_and_evaluate_lstm_variant(
-#         x_train, y_train, x_val, y_val, x_test, y_test, num_classes, vocab_size,
-#         EMBEDDING_DIM, MAX_LEN, default_lstm_config, epochs=1, description="DefaultKeras"
-#     )
-#     keras_model_instance.save("default_lstm_model.keras")
-#     print("\n--- Manual LSTM Forward Propagation Test ---")
-#     manual_lstm = LSTMFromScratch()
-#     manual_lstm.load_keras_model(keras_model_instance)
-#     test_sample_idx = slice(0, 64)
-#     x_test_sample = x_test[test_sample_idx]
-#     y_test_sample_labels = y_test[test_sample_idx]
-#     y_pred_keras_sample = keras_model_instance.predict(x_test_sample, verbose=0)
-#     y_pred_manual_sample = manual_lstm.predict(x_test_sample)
-#     print(f"Keras preds (sample sum): {np.sum(y_pred_keras_sample):.6f}")
-#     print(f"Manual preds (sample sum): {np.sum(y_pred_manual_sample):.6f}")
-#     abs_diff = np.sum(np.abs(y_pred_keras_sample - y_pred_manual_sample))
-#     print(f"Sum of absolute differences (sample): {abs_diff:.6f}")
-#     assert abs_diff < 1e-3, "Manual LSTM forward pass significantly different from Keras!"
-#     f1_keras_sample = calculate_f1_macro(y_test_sample_labels, y_pred_keras_sample)
-#     f1_manual_sample = calculate_f1_macro(y_test_sample_labels, y_pred_manual_sample)
-#     print(f"F1 Keras (sample): {f1_keras_sample:.4f}")
-#     print(f"F1 Manual (sample): {f1_manual_sample:.4f}")
-#     print("\n--- Manual LSTM Backward Propagation & Training Test (Bonus) ---")
-#     simpler_config = [{'units': 8, 'bidirectional': False, 'return_sequences': False}]
-#     simpler_keras_model = build_lstm_model(vocab_size, EMBEDDING_DIM, MAX_LEN, num_classes, simpler_config)
-#     simpler_keras_model.build(input_shape=(None, MAX_LEN))
-#     manual_lstm_train = LSTMFromScratch()
-#     manual_lstm_train.load_keras_model(simpler_keras_model)
-#     loss_func = ManualSparseCategoricalCrossentropy()
-#     optimizer = ManualSGD(learning_rate=0.01)
-#     manual_lstm_train.compile_manual(loss_fn_instance=loss_func, optimizer_instance=optimizer)
-#     print("Starting manual training with LSTMFromScratch...")
-#     x_train_tiny = x_train[:64]
-#     y_train_tiny = y_train[:64]
-#     try:
-#         manual_lstm_train.fit_manual(x_train_tiny, y_train_tiny, epochs=1, batch_size=8)
-#         print("Manual training epoch completed.")
-#         y_pred_manual_after_train = manual_lstm_train.predict(x_test_sample)
-#         f1_manual_after_train = calculate_f1_macro(y_test_sample_labels, y_pred_manual_after_train)
-#         print(f"F1 Manual (sample) after 1 epoch of manual training: {f1_manual_after_train:.4f}")
-#     except NotImplementedError as e:
-#         print(f"Could not run manual training: {e}")
-#     except Exception as e:
-#         print(f"An error occurred during manual training test: {e}")
-#     print("LSTM module direct execution test finished.")
