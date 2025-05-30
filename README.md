@@ -15,11 +15,13 @@
 ## Overview
 
 This project manually implements three deep learning architectures (without TensorFlow/PyTorch):
+
 - Convolutional Neural Network (CNN) for image classification (CIFAR-10)
 - Recurrent Neural Network (SimpleRNN) for sentiment analysis (NusaX dataset)
 - Long Short-Term Memory (LSTM) as an enhancement of RNN
 
 Key features supported:
+
 - Modular layer architecture (Conv2D, Pooling, RNN, LSTM, Dense, Embedding)
 - Manual forward propagation using NumPy
 - Loading weights from trained Keras models
@@ -34,14 +36,18 @@ Key features supported:
 ## Requirements
 
 - `Python`
-- `joblib==1.4.2`
-- `numpy==2.2.3`
+- `numpy==2.1.3`
+- `pandas==2.2.3`
+- `matplotlib==3.10.3`
 - `scikit-learn==1.6.1`
-- `scipy==1.15.2`
-- `threadpoolctl==3.5.0`
-- `tqdm==4.67.1`
-- `matplotlib==3.10.1`
-- `networkx==3.4.2`
+- `scipy==1.15.3`
+- `tensorflow==2.19.0`
+- `keras==3.9.2`
+- `jupyter_core==5.8.1`
+- `ipykernel==6.29.5`
+- `ipython==9.2.0`
+- `protobuf==5.29.4`
+- `requests==2.32.3`
 
 ## Setting Up
 
@@ -49,13 +55,13 @@ Key features supported:
 > This setup is for WSL. If you are developing on Windows, create your own virtual environment.
 
 <details>
-<summary>:eyes: Get Started</summary>  
+<summary>:eyes: Get Started</summary>
 
 #### Clone the Repository:
 
 ```sh
- git clone https://github.com/rizqikapratamaa/Tubes1_ML_51.git
- cd TUBES1_ML_51
+ git clone https://github.com/rizqikapratamaa/Tubes2-IF3270-ML31
+ cd Tubes2-IF3270-ML31
 ```
 
 #### Create new env
@@ -71,11 +77,7 @@ Key features supported:
  pip install -r requirement.txt
 ```
 
-#### Run the program
-
-```sh
- python3 main.py
-```
+#### Run the program as needed
 
 #### After finishing, exit from venv
 
