@@ -2,7 +2,7 @@ import numpy as np
 import tensorflow as tf
 from tensorflow import keras
 
-import lstm_1 as lstm_model 
+import lstm as lstm_model 
 
 from utils import calculate_f1_macro
 

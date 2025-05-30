@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import tensorflow as tf
 from tensorflow import keras
-from tensorflow.keras import layers
+from tensorflow.keras import layers, models
 from sklearn.preprocessing import LabelEncoder
 from utils import (sigmoid, tanh, softmax, relu, calculate_f1_macro, plot_history,
                    d_sigmoid_dz, d_tanh_dz, d_relu_dz, ManualSparseCategoricalCrossentropy)
@@ -123,25 +123,45 @@ def build_lstm_model(vocab_size, embedding_dim, maxlen, num_classes,
 
 def train_and_evaluate_lstm_variant(
     x_train, y_train, x_val, y_val, x_test, y_test,
-    num_classes, vocab_size, embedding_dim, maxlen,
-    lstm_configs, dropout_rate=0.5, epochs=10, batch_size=64, description=""):
-    print(f"\n--- Training LSTM: {description} ---")
-    print(f"LSTM Configs: {lstm_configs}, Dropout: {dropout_rate}")
-    model = build_lstm_model(vocab_size, embedding_dim, maxlen, num_classes,
-                             lstm_configs, dropout_rate)
-    model.summary()
-    history = model.fit(x_train, y_train,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        validation_data=(x_val, y_val),
-                        verbose=1)
-    plot_history(history, title_prefix=f"LSTM {description} Keras")
-    _, test_acc_keras = model.evaluate(x_test, y_test, verbose=0)
-    y_pred_keras_proba = model.predict(x_test, verbose=0)
-    f1_keras = calculate_f1_macro(y_test, y_pred_keras_proba)
-    print(f"Test Accuracy (Keras LSTM {description}): {test_acc_keras:.4f}")
-    print(f"Macro F1-Score (Keras LSTM {description}): {f1_keras:.4f}")
-    return model, f1_keras, history
+    num_classes, vocab_size, embedding_dim, max_len,
+    lstm_config, epochs=5, batch_size=32, description=""
+):
+    model = models.Sequential()
+    model.add(layers.Embedding(vocab_size, embedding_dim, input_length=max_len))
+    
+    for layer_config in lstm_config:
+        units = layer_config.get('units', 64)
+        bidirectional = layer_config.get('bidirectional', False)
+        return_sequences = layer_config.get('return_sequences', False)
+        
+        lstm_layer = layers.LSTM(units, return_sequences=return_sequences)
+        if bidirectional:
+            lstm_layer = layers.Bidirectional(lstm_layer)
+        model.add(lstm_layer)
+    
+    model.add(layers.Dropout(0.5))
+    model.add(layers.Dense(num_classes, activation='softmax'))
+
+    model.compile(
+        optimizer='adam',
+        loss='sparse_categorical_crossentropy',
+        metrics=['accuracy']
+    )
+    
+    history = model.fit(
+        x_train, y_train,
+        validation_data=(x_val, y_val),
+        epochs=epochs,
+        batch_size=batch_size,
+        verbose=1
+    )
+    
+    y_pred_proba = model.predict(x_test, verbose=0)
+    f1_score = calculate_f1_macro(y_test, y_pred_proba, num_classes)
+    
+    print(f"Completed training for {description}. Macro F1-Score: {f1_score:.4f}")
+    
+    return model, f1_score, history
 
 def lstm_hyperparameter_analysis(
     x_train, y_train, x_val, y_val, x_test, y_test,
